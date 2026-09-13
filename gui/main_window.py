@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
 )
 
 from gui.library_tab import LibraryTab
+from gui.log_tab import PlayLogTab
+from gui.log_texts import NAV_LOG_TEXT
 from gui.player_tab import PlayerTab
 from gui.theme import (
     BRAND,
@@ -44,6 +46,7 @@ NAV_ITEMS = [
     ("上传识别", "↑"),
     ("乐谱库", "♪"),
     ("演奏控制", "▶"),
+    (NAV_LOG_TEXT, "≡"),
 ]
 
 TITLE_BAR_HEIGHT = 32
@@ -305,6 +308,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.upload_tab)
         self.stack.addWidget(self.library_tab)
         self.stack.addWidget(self.player_tab)
+        self.log_tab = PlayLogTab()
+        self.stack.addWidget(self.log_tab)
         body.addWidget(self.stack, 1)
 
         root_layout.addLayout(body, 1)
