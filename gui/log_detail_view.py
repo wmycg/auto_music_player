@@ -68,6 +68,7 @@ class SessionDetailView(QWidget):
         self._rendered_count = 0
         self._filter = FILTER_ALL
         self._closed = False
+        self._active_workers = set()
         self._build_ui()
 
     # ---------- UI 构建 ----------
@@ -142,7 +143,13 @@ class SessionDetailView(QWidget):
             return
 
         worker = _ParseWorker(lambda: self._parse(log_path))
-        worker.signals.finished.connect(self._apply_parse_result)
+        self._active_workers.add(worker)
+
+        def _on_finished(payload):
+            self._active_workers.discard(worker)
+            self._apply_parse_result(payload)
+
+        worker.signals.finished.connect(_on_finished)
         QThreadPool.globalInstance().start(worker)
 
     @staticmethod

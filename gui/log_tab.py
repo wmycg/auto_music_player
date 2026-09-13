@@ -110,6 +110,7 @@ class PlayLogTab(QWidget):
         self._manager = LogManager(log_dir, export_dir)
         self._sync_mode = sync_mode
         self._task_running = False
+        self._active_workers = set()
         self._build_ui()
 
     # ---------- UI 构建 ----------
@@ -194,7 +195,13 @@ class PlayLogTab(QWidget):
             on_done(payload)
             return
         worker = LogWorker(task_type, fn)
-        worker.signals.finished.connect(on_done)
+        self._active_workers.add(worker)
+
+        def _on_finished(_task_type, payload):
+            self._active_workers.discard(worker)
+            on_done(payload)
+
+        worker.signals.finished.connect(_on_finished)
         QThreadPool.globalInstance().start(worker)
 
     def _set_buttons_enabled(self, enabled: bool):
