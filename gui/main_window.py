@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui.library_tab import LibraryTab
+from core.preview_player import PreviewPlayer
 from gui.log_tab import PlayLogTab
 from gui.log_texts import NAV_LOG_TEXT
 from gui.player_tab import PlayerTab
@@ -185,6 +186,7 @@ class MainWindow(QMainWindow):
         profile=None,
         profiles=None,
         event_player=None,
+        preview_player=None,
     ):
         super().__init__()
         self._cfg = cfg
@@ -195,6 +197,9 @@ class MainWindow(QMainWindow):
         self._profile = profile
         self._profiles = list(profiles or [])
         self._event_player = event_player
+        self._preview_player = (
+            preview_player if preview_player is not None else PreviewPlayer(self)
+        )
         self._drag_pos = None
         self._is_maximized = False
         self._normal_geometry = None
@@ -210,7 +215,7 @@ class MainWindow(QMainWindow):
         self.resize(1080, 720)
         self.setMinimumSize(900, 600)
 
-        self.upload_tab = UploadTab(db)
+        self.upload_tab = UploadTab(db, preview_player=self._preview_player)
         self.library_tab = LibraryTab(db)
         self.player_tab = PlayerTab(
             db,
@@ -220,6 +225,7 @@ class MainWindow(QMainWindow):
             profile=self._profile,
             profiles=self._profiles,
             event_player=self._event_player,
+            preview_player=self._preview_player,
         )
 
         self._build_ui()
@@ -256,6 +262,7 @@ class MainWindow(QMainWindow):
         self._player.shutdown()
         if self._event_player is not None:
             self._event_player.shutdown()
+        self._preview_player.shutdown()
 
     def _build_ui(self):
         root = QWidget()

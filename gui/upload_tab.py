@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from core.parser import parse_jianpu
 from core.prompt import JIANPU_PROMPT
+from core.preview_player import PreviewPlayer
 from core.score_model import validate_notes
 from core.jianpu_editor import insert_rest, delete_event
 from gui.widgets import AppDialog, BottomResizableCard
@@ -96,11 +97,18 @@ class PromptCard(QFrame):
 class UploadTab(QWidget):
     saved = pyqtSignal()
 
-    def __init__(self, db):
+    def __init__(self, db, preview_player=None):
         super().__init__()
         self._db = db
+        self._preview_player = (
+            preview_player if preview_player is not None else PreviewPlayer(self)
+        )
+        self._preview_active = False
+        self._preview_error = False
         self._last_parse_errors = []
         self._build_ui()
+        self._preview_player.finished.connect(self._on_preview_finished)
+        self._preview_player.error_occurred.connect(self._on_preview_error)
 
     def _card(self, resizable=False):
         if resizable:
@@ -190,6 +198,7 @@ class UploadTab(QWidget):
         )
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.itemChanged.connect(self._update_preview_button)
         lay3.addWidget(self.table, 1)
 
         # 编辑按钮组
@@ -225,18 +234,31 @@ class UploadTab(QWidget):
         table_row = QHBoxLayout()
         add_btn = QPushButton("添加行")
         add_btn.setObjectName("BtnSecondary")
-        add_btn.clicked.connect(lambda: self.table.insertRow(self.table.rowCount()))
+        add_btn.clicked.connect(self._add_table_row)
         del_btn = QPushButton("删除选中行")
         del_btn.setObjectName("BtnSecondary")
         del_btn.clicked.connect(self._delete_selected_rows)
         clear_btn = QPushButton("清空表格")
         clear_btn.setObjectName("BtnDanger")
-        clear_btn.clicked.connect(lambda: self.table.setRowCount(0))
+        clear_btn.clicked.connect(self._clear_table)
         table_row.addWidget(add_btn)
         table_row.addWidget(del_btn)
         table_row.addWidget(clear_btn)
+        self.preview_btn = QPushButton("试听当前乐谱")
+        self.preview_btn.setObjectName("BtnPrimary")
+        self.preview_btn.setToolTip("使用电脑扬声器试听当前校对结果,不会向游戏发送按键")
+        self.preview_btn.setEnabled(False)
+        self.preview_btn.clicked.connect(self._toggle_preview)
+        table_row.addWidget(self.preview_btn)
         table_row.addStretch(1)
         lay3.addLayout(table_row)
+
+        self.preview_status = QLabel(
+            "试听只播放电脑音频，不会操作游戏；建议校对完成后先试听，再保存或开始演奏。"
+        )
+        self.preview_status.setObjectName("SectionSubtitle")
+        self.preview_status.setWordWrap(True)
+        lay3.addWidget(self.preview_status)
 
         self._fix_card_cursors(card3)
         inner_layout.addWidget(card3)
@@ -273,6 +295,7 @@ class UploadTab(QWidget):
         inner_layout.addWidget(card)
 
     def _parse(self):
+        self._stop_preview()
         raw = self.raw_text.toPlainText().strip()
         if not raw:
             AppDialog.show_warning(
@@ -307,11 +330,89 @@ class UploadTab(QWidget):
             self.table.setItem(
                 row, 2, QTableWidgetItem("#" if n.get("semitone") else "")
             )
+        self._update_preview_button()
+
+    def _clear_table(self):
+        self._stop_preview()
+        self.table.setRowCount(0)
+        self._update_preview_button()
+
+    def _add_table_row(self):
+        self.table.insertRow(self.table.rowCount())
+        self._update_preview_button()
+
+    def _update_preview_button(self, *_args):
+        if not hasattr(self, "preview_btn"):
+            return
+        self.preview_btn.setEnabled(self._preview_active or self.table.rowCount() > 0)
+
+    def _toggle_preview(self):
+        if self._preview_active:
+            self._stop_preview()
+            return
+        try:
+            notes = self._table_to_notes()
+        except ValueError as e:
+            AppDialog.show_error(self, "试听失败", str(e))
+            return
+        if not notes:
+            AppDialog.show_warning(self, "提示", "表格为空,无法试听")
+            return
+        self._preview_error = False
+        self._preview_active = True
+        self.preview_btn.setText("停止试听")
+        self.preview_status.setText("试听中…不会向游戏发送按键")
+        try:
+            started = self._preview_player.play(
+                notes,
+                bpm=self.bpm_spin.value(),
+                score_name=self.name_edit.text().strip() or "当前校对乐谱",
+            )
+        except (TypeError, ValueError, RuntimeError) as e:
+            self._preview_active = False
+            self.preview_btn.setText("试听当前乐谱")
+            self._update_preview_button()
+            AppDialog.show_error(self, "试听失败", str(e))
+            return
+        if not started:
+            self._preview_active = False
+            self.preview_btn.setText("试听当前乐谱")
+            self.preview_status.setText("已有试听正在播放,请先停止后再试")
+            self._update_preview_button()
+
+    def _stop_preview(self):
+        if not self._preview_active:
+            return
+        self._preview_active = False
+        self._preview_player.stop()
+        self.preview_btn.setText("试听当前乐谱")
+        self.preview_status.setText("试听已停止；不会向游戏发送按键")
+        self._update_preview_button()
+
+    def _on_preview_error(self, message):
+        if self._preview_active:
+            self._preview_error = True
+            self.preview_status.setText(f"试听失败: {message}")
+
+    def _on_preview_finished(self, normal):
+        if not self._preview_active:
+            return
+        self._preview_active = False
+        self.preview_btn.setText("试听当前乐谱")
+        if self._preview_error:
+            self.preview_status.setText("试听失败,请检查系统扬声器设置")
+        elif normal:
+            self.preview_status.setText("试听完成；不会向游戏发送按键")
+        else:
+            self.preview_status.setText("试听已停止；不会向游戏发送按键")
+        self._update_preview_button()
 
     def _delete_selected_rows(self):
+        self._stop_preview()
         rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
         for r in rows:
             self.table.removeRow(r)
+        self._update_preview_button()
 
     def _insert_rest_at_selection(self, before: bool):
         """在选中音符的前/后插入半拍休止符。"""
