@@ -301,7 +301,7 @@ class PlayerTab(QWidget):
         self.preview_btn.setMinimumWidth(120)
         self.preview_btn.setEnabled(False)
         self.preview_btn.setToolTip(
-            "使用电脑扬声器试听当前乐谱,不会向游戏发送键盘或鼠标按键"
+            "使用系统大钢琴音色试听当前乐谱,不会向游戏发送键盘或鼠标按键"
         )
         self.preview_btn.clicked.connect(self._toggle_preview)
         self.stop_btn = QPushButton("停止")
@@ -353,7 +353,7 @@ class PlayerTab(QWidget):
         )
         lay.addWidget(hint)
         self.preview_status = QLabel(
-            "试听只播放电脑音频，不会操作游戏；建议确认旋律后再开始演奏。"
+            "试听使用系统大钢琴音色，不会操作游戏；建议确认旋律后再开始演奏。"
         )
         self.preview_status.setObjectName("HintText")
         self.preview_status.setWordWrap(True)
@@ -463,7 +463,7 @@ class PlayerTab(QWidget):
         self._preview_active = True
         self.preview_btn.setText("停止试听")
         self.play_btn.setEnabled(False)
-        self.preview_status.setText("试听中…不会向游戏发送按键")
+        self.preview_status.setText("大钢琴音色试听中…不会向游戏发送按键")
         try:
             started = self._preview_player.play(
                 score["notes"],

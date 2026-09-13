@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PyQt6.QtWidgets import QApplication, QLabel, QCheckBox, QPushButton
+from PyQt6.QtWidgets import QApplication, QLabel, QCheckBox, QPushButton, QScrollArea, QWidget
 
 from gui.disclaimer import (
     BTN_CONTINUE_TEXT,
@@ -27,6 +27,7 @@ from gui.disclaimer import (
     SKIP_CHECKBOX_TEXT,
     confirm_risk_disclaimer,
 )
+from gui.theme import SURFACE_2
 
 BANNED_TEXTS = ("不再提示", "跳过", "稍后决定")
 
@@ -132,6 +133,17 @@ class TestRiskDisclaimerDialog(unittest.TestCase):
         body = self.dlg.findChild(QLabel, "DisclaimerBody")
         self.assertIsNotNone(body)
         self.assertEqual(body.text(), DISCLAIMER_BODY)
+
+    def test_content_area_has_contrasting_theme_background(self):
+        content = self.dlg.findChild(QWidget, "DisclaimerContent")
+        scroll = self.dlg.findChild(QScrollArea, "DisclaimerScroll")
+        body = self.dlg.findChild(QLabel, "DisclaimerBody")
+        self.assertIsNotNone(content)
+        self.assertIsNotNone(scroll)
+        self.assertIsNotNone(body)
+        self.assertIn(SURFACE_2, content.styleSheet())
+        self.assertIn(SURFACE_2, scroll.viewport().styleSheet())
+        self.assertIn("font-size: 14px", body.styleSheet())
 
 
 class TestConfirmRiskDisclaimer(unittest.TestCase):

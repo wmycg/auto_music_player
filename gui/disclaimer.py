@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from gui.theme import INK, LINE_2, STATE_ERROR, SURFACE
+from gui.theme import INK, LINE_2, STATE_ERROR, SURFACE, SURFACE_2
 
 # ---------- 文案(统一常量组:唯一存放处) ----------
 DISCLAIMER_TITLE = "⚠️ 风险警示"
@@ -94,6 +94,10 @@ class RiskDisclaimerDialog(QDialog):
         lay.addWidget(title)
 
         content = QWidget()
+        content.setObjectName("DisclaimerContent")
+        content.setStyleSheet(
+            f"QWidget#DisclaimerContent {{ background: {SURFACE_2}; }}"
+        )
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(14)
@@ -102,7 +106,7 @@ class RiskDisclaimerDialog(QDialog):
         body.setObjectName("DisclaimerBody")
         body.setWordWrap(True)
         body.setStyleSheet(
-            f"QLabel#DisclaimerBody {{ color: {INK}; font-size: 13px;"
+            f"QLabel#DisclaimerBody {{ color: {INK}; font-size: 14px;"
             " background: transparent; border: none; }"
         )
         content_layout.addWidget(body)
@@ -110,7 +114,7 @@ class RiskDisclaimerDialog(QDialog):
         tutorial_title = QLabel(DISCLAIMER_TUTORIAL_TITLE)
         tutorial_title.setObjectName("DisclaimerTutorialTitle")
         tutorial_title.setStyleSheet(
-            f"color: {STATE_ERROR}; font-size: 14px; font-weight: 700;"
+            f"color: {STATE_ERROR}; font-size: 15px; font-weight: 700;"
             " background: transparent; border: none;"
         )
         content_layout.addWidget(tutorial_title)
@@ -119,7 +123,7 @@ class RiskDisclaimerDialog(QDialog):
         tutorial.setObjectName("DisclaimerTutorial")
         tutorial.setWordWrap(True)
         tutorial.setStyleSheet(
-            f"QLabel#DisclaimerTutorial {{ color: {INK}; font-size: 13px;"
+            f"QLabel#DisclaimerTutorial {{ color: {INK}; font-size: 14px;"
             " background: transparent; border: none; }"
         )
         content_layout.addWidget(tutorial)
@@ -128,7 +132,7 @@ class RiskDisclaimerDialog(QDialog):
         open_source.setObjectName("DisclaimerOpenSource")
         open_source.setWordWrap(True)
         open_source.setStyleSheet(
-            f"QLabel#DisclaimerOpenSource {{ color: {INK}; font-size: 13px;"
+            f"QLabel#DisclaimerOpenSource {{ color: {INK}; font-size: 14px;"
             " background: transparent; border: none; }"
         )
         content_layout.addWidget(open_source)
@@ -138,8 +142,11 @@ class RiskDisclaimerDialog(QDialog):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(
-            "QScrollArea#DisclaimerScroll { border: none; background: transparent; }"
-            "QScrollArea#DisclaimerScroll > QWidget { background: transparent; }"
+            f"QScrollArea#DisclaimerScroll {{ border: none; background: {SURFACE_2}; }}"
+            f"QScrollArea#DisclaimerScroll > QWidget {{ background: {SURFACE_2}; }}"
+        )
+        scroll.viewport().setStyleSheet(
+            f"background: {SURFACE_2}; border: none;"
         )
         scroll.setWidget(content)
         lay.addWidget(scroll, 1)

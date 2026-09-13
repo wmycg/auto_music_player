@@ -246,7 +246,9 @@ class UploadTab(QWidget):
         table_row.addWidget(clear_btn)
         self.preview_btn = QPushButton("试听当前乐谱")
         self.preview_btn.setObjectName("BtnPrimary")
-        self.preview_btn.setToolTip("使用电脑扬声器试听当前校对结果,不会向游戏发送按键")
+        self.preview_btn.setToolTip(
+            "使用系统大钢琴音色试听当前校对结果,不会向游戏发送按键"
+        )
         self.preview_btn.setEnabled(False)
         self.preview_btn.clicked.connect(self._toggle_preview)
         table_row.addWidget(self.preview_btn)
@@ -254,7 +256,7 @@ class UploadTab(QWidget):
         lay3.addLayout(table_row)
 
         self.preview_status = QLabel(
-            "试听只播放电脑音频，不会操作游戏；建议校对完成后先试听，再保存或开始演奏。"
+            "试听使用系统大钢琴音色，不会操作游戏；建议校对完成后先试听，再保存或开始演奏。"
         )
         self.preview_status.setObjectName("SectionSubtitle")
         self.preview_status.setWordWrap(True)
@@ -361,7 +363,7 @@ class UploadTab(QWidget):
         self._preview_error = False
         self._preview_active = True
         self.preview_btn.setText("停止试听")
-        self.preview_status.setText("试听中…不会向游戏发送按键")
+        self.preview_status.setText("大钢琴音色试听中…不会向游戏发送按键")
         try:
             started = self._preview_player.play(
                 notes,
