@@ -12,6 +12,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from core.database import ScoreDB
+from core.event_logger import configure_event_logger
 from core.event_player import EventPlayer
 from core.humanize import HumanizeParams
 from core.keyboard_driver import KeyboardDriver
@@ -75,11 +76,22 @@ def resource_path(name: str) -> str:
     return os.path.join(base, name)
 
 
+def resolve_data_dir(config_path: str, configured_data_dir: str) -> str:
+    """相对 data_dir 始终按配置文件位置解析，与启动 cwd/权限无关。"""
+    config_path = os.path.abspath(config_path)
+    path = os.fspath(configured_data_dir)
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(config_path), path)
+    return os.path.abspath(path)
+
+
 def main():
     config_path = ensure_config()
+    config_path = os.path.abspath(config_path)
     cfg = load_config(config_path)
     app_cfg = cfg.get("app", {})
-    data_dir = app_cfg.get("data_dir", "data")
+    configured_data_dir = app_cfg.get("data_dir", "data")
+    data_dir = resolve_data_dir(config_path, configured_data_dir)
     player_cfg = cfg.get("player", {})
     db = ScoreDB(os.path.join(data_dir, app_cfg.get("db_file", "scores.db")))
     keymap = KeyMap(cfg["keymap"])
@@ -115,9 +127,12 @@ def main():
         humanize=humanize_params,
     )
     # 事件演奏器(M4):三角洲档位走编译器 + EventPlayer,与默认 Player 共用同一驱动
+    event_log_dir = os.path.join(data_dir, "play_logs")
+    event_logger = configure_event_logger(event_log_dir)
     event_player = EventPlayer(
         driver=driver,
         latency_compensation_ms=float(player_cfg.get("latency_compensation_ms", 0)),
+        logger=event_logger,
     )
     # 进程退出兜底:任何退出路径(atexit)都停止演奏并释放全部按键,防止键卡死
     atexit.register(player.shutdown)
@@ -162,6 +177,8 @@ def main():
         profile=profile,
         profiles=profiles,
         event_player=event_player,
+        event_log_dir=event_log_dir,
+        export_dir=os.path.join(data_dir, "exports"),
     )
     win.show()
     sys.exit(app.exec())

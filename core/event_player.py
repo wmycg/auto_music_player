@@ -10,10 +10,14 @@
 这样 M4 对鸣潮/原神的回归风险为零。
 """
 
+import ctypes
+import os
 import threading
 import time
 
 from PyQt6.QtCore import QObject, pyqtSignal
+
+from core.event_logger import NoteEvent
 
 _INTERRUPT_MODES = ("pause", "abort")
 
@@ -25,15 +29,18 @@ class EventPlayer(QObject):
     aborted = pyqtSignal(str)            # 不可恢复中止: 原因
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, driver, latency_compensation_ms=0, parent=None):
+    def __init__(self, driver, latency_compensation_ms=0, parent=None, *, logger=None):
         super().__init__(parent)
         self._driver = driver
+        self._logger = logger
         self.latency_compensation_ms = max(0.0, float(latency_compensation_ms))
         self._stop_event = threading.Event()
         self._thread = None
         self._force_abort = False
         self._abort_reason = "演奏被中断"
         self._resume_source_index = 0
+        self.last_log_path = ""
+        self.last_log_error = None
 
     @property
     def driver(self):
@@ -57,6 +64,9 @@ class EventPlayer(QObject):
         *,
         source_total=None,
         source_start_index=None,
+        source_notes=None,
+        bpm=0,
+        trace_context=None,
     ):
         """播放事件序列。interrupt_mode 决定 stop() 的语义:
         "pause" = 可恢复暂停;"abort" = 不可恢复中止(清空进度)。
@@ -68,6 +78,8 @@ class EventPlayer(QObject):
                 f"interrupt_mode 必须是 {'/'.join(_INTERRUPT_MODES)}: {interrupt_mode!r}")
         self._force_abort = False
         self._abort_reason = "演奏被中断"
+        self.last_log_path = ""
+        self.last_log_error = None
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -78,6 +90,9 @@ class EventPlayer(QObject):
                 str(score_name),
                 source_total,
                 source_start_index,
+                list(source_notes) if source_notes is not None else None,
+                int(bpm),
+                dict(trace_context or {}),
             ),
             daemon=True,
         )
@@ -118,7 +133,69 @@ class EventPlayer(QObject):
         if keys or mouse:
             self._driver.panic_release(keys, mouse)
 
-    def _run(self, events, interrupt_mode, start_index, score_name, source_total, source_start_index):
+    @staticmethod
+    def _source_keys(events):
+        """按原始谱面索引汇总实际发送的键鼠，供 note 日志追溯。"""
+        result = {}
+        for event in events:
+            if event.source_index is None or event.action != "down":
+                continue
+            key = event.key if event.device == "kb" else f"mouse:{event.key}"
+            keys = result.setdefault(event.source_index, [])
+            if key not in keys:
+                keys.append(key)
+        return result
+
+    @staticmethod
+    def _is_admin():
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return None
+
+    def _log_source_note(
+        self,
+        source_index,
+        event,
+        t0,
+        source_notes,
+        source_keys,
+        *,
+        success,
+        error=None,
+    ):
+        if self._logger is None or source_index is None:
+            return
+        note = {}
+        if source_notes is not None and 0 <= source_index < len(source_notes):
+            note = source_notes[source_index]
+        expected = max(0.0, float(event.t_ms) / 1000.0)
+        actual = max(0.0, time.perf_counter() - t0)
+        self._logger.log_note(
+            NoteEvent(
+                index=int(source_index),
+                notes=list(note.get("notes", [])),
+                keys=list(source_keys.get(source_index, [])),
+                expected_time=expected,
+                actual_time=actual,
+                deviation_ms=(actual - expected) * 1000.0,
+                success=bool(success),
+                error=error,
+            )
+        )
+
+    def _run(
+        self,
+        events,
+        interrupt_mode,
+        start_index,
+        score_name,
+        source_total,
+        source_start_index,
+        source_notes,
+        bpm,
+        trace_context,
+    ):
         event_total = len(events)
         done = min(start_index, event_total)
         tagged = any(e.source_index is not None for e in events)
@@ -137,6 +214,43 @@ class EventPlayer(QObject):
             resume_source_index = done
         normal = False
         error = None
+        current_event = None
+        logged_sources = set()
+        source_keys = self._source_keys(events)
+        log_total = (
+            int(source_total)
+            if source_total is not None
+            else len(source_notes) if source_notes is not None else total
+        )
+        log_started = False
+        if self._logger is not None:
+            self._logger.start_session(score_name, bpm, log_total)
+            log_started = self._logger.is_active
+            self.last_log_path = str(self._logger.log_path or "")
+            self.last_log_error = self._logger.last_error
+            if log_started:
+                plan_details = {
+                    "stage": "event_plan_received",
+                    "event_count": event_total,
+                    "source_total": log_total,
+                    "source_start_index": source_start_index,
+                    "is_admin": self._is_admin(),
+                    "cwd": os.getcwd(),
+                }
+                plan_details.update(trace_context)
+                self._logger.log_env("playback_pipeline", **plan_details)
+                self._logger.log_control(
+                    "resume" if (source_start_index or 0) > 0 else "start",
+                    bpm=bpm,
+                    start_index=source_start_index,
+                    total_notes=log_total,
+                )
+                self._logger.log_control(
+                    "play_started",
+                    bpm=bpm,
+                    start_index=source_start_index,
+                    event_count=event_total,
+                )
         comp_s = max(0.0, min(self.latency_compensation_ms, 200.0)) / 1000.0
         # 绝对时钟:事件 i 的目标时刻 = t0 + events[i].t_ms/1000 - 补偿。
         # 与 Player 同款调度,节奏不随事件数累积漂移。
@@ -153,10 +267,30 @@ class EventPlayer(QObject):
                         break  # 停止信号在事件到达前到来:断点留在 i
                 elif self._stop_event.is_set():
                     break
+                current_event = e
                 self._dispatch(e)
+                if log_started:
+                    self._logger.log_env(
+                        "playback_pipeline",
+                        stage="event_dispatched",
+                        event_index=i,
+                        device=e.device,
+                        key=e.key,
+                        action=e.action,
+                        source_index=e.source_index,
+                    )
                 done = i + 1
                 if tagged:
                     if e.source_end and e.source_index is not None:
+                        self._log_source_note(
+                            e.source_index,
+                            e,
+                            t0,
+                            source_notes,
+                            source_keys,
+                            success=True,
+                        )
+                        logged_sources.add(e.source_index)
                         resume_source_index = max(resume_source_index, e.source_index + 1)
                         resume_source_index = min(resume_source_index, total)
                         self._resume_source_index = resume_source_index
@@ -173,12 +307,57 @@ class EventPlayer(QObject):
             normal = True
         except Exception as e:
             error = str(e)
+            if (
+                log_started
+                and current_event is not None
+                and current_event.source_index is not None
+                and current_event.source_index not in logged_sources
+            ):
+                self._log_source_note(
+                    current_event.source_index,
+                    current_event,
+                    t0,
+                    source_notes,
+                    source_keys,
+                    success=False,
+                    error=error,
+                )
         finally:
-            self._release_all(events)
+            try:
+                self._release_all(events)
+            finally:
+                if log_started:
+                    completed = log_total if normal else (
+                        resume_source_index if tagged else done
+                    )
+                    footer_error = error
+                    if self._stop_event.is_set() and (
+                        self._force_abort or interrupt_mode == "abort"
+                    ):
+                        footer_error = footer_error or self._abort_reason
+                    self._logger.log_env(
+                        "playback_pipeline",
+                        stage="session_closing",
+                        completed=completed,
+                        total=log_total,
+                        stopped=self._stop_event.is_set(),
+                        error=footer_error,
+                    )
+                    self._logger.end_session(
+                        completed=completed,
+                        total=log_total,
+                        stopped_early=self._stop_event.is_set() or error is not None,
+                        error=footer_error,
+                    )
+                    self.last_log_error = self._logger.last_error
         if normal and tagged and resume_source_index < total:
             # 尾部休止没有输入事件，也应在完成态反映为完整乐谱。
             self._resume_source_index = total
             self.progress.emit(total, total)
+        elif normal and not tagged and source_total is not None and event_total == 0:
+            # 全休止谱不会产生输入事件，但逻辑谱面已经完整走完。
+            self._resume_source_index = log_total
+            self.progress.emit(log_total, log_total)
         if error:
             self.error_occurred.emit(error)
         self.finished.emit(normal)

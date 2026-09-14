@@ -613,10 +613,11 @@ class PlayerTab(QWidget):
             self.progress_state.setText("演奏完成")
             return
         remaining_notes = notes[start_index:]
+        scenario_id = self.scenario_combo.currentData() or "free_play"
         plan, degradations = build_event_plan(
             remaining_notes,
             self._profile,
-            self.scenario_combo.currentData() or "free_play",
+            scenario_id,
             bpm=bpm,
             settle_ms=self._settle_ms,
             release_settle_ms=self._release_settle_ms,
@@ -632,6 +633,14 @@ class PlayerTab(QWidget):
             score_name=score_name,
             source_total=len(notes),
             source_start_index=start_index,
+            source_notes=notes,
+            bpm=bpm,
+            trace_context={
+                "profile_id": self._profile.id,
+                "profile_name": self._profile.name,
+                "scenario_id": scenario_id,
+                "degradation_count": len(degradations),
+            },
         )
         n = len(degradations)
         suffix = f" · 已降级 {n} 处" if n else ""
@@ -930,14 +939,26 @@ class PlayerTab(QWidget):
         self.play_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._update_preview_button()
-        summary = getattr(self._player, "last_summary", None)
+        is_event_path = self._use_event_path() and self._event_player is not None
+        event_log_path = ""
+        event_log_error = None
+        if is_event_path:
+            event_log_path = self._event_player.last_log_path
+            event_log_error = self._event_player.last_log_error
+        summary = None if is_event_path else getattr(self._player, "last_summary", None)
         if summary is not None:
             self.progress_state.setText(summary.format())
             if summary.log_path:
                 self.progress_state.setToolTip(f"演奏日志: {summary.log_path}")
+        elif event_log_path:
+            self.progress_state.setToolTip(f"演奏日志: {event_log_path}")
+        elif event_log_error:
+            self.progress_state.setToolTip(f"日志写入失败: {event_log_error}")
         if normal:
             self.state_label.setText("就绪")
-            if summary is None:
+            if event_log_error:
+                self.progress_state.setText(f"演奏完成 · 日志写入失败: {event_log_error}")
+            elif summary is None:
                 suffix = (
                     f" · 已降级 {event_degradation_count} 处"
                     if event_degradation_count

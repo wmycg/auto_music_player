@@ -14,6 +14,7 @@
 
 import json
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -116,45 +117,71 @@ class EventLogger:
     """事件流日志写入器，管理单次演奏会话的所有事件"""
 
     def __init__(self, log_dir: str = "data/play_logs"):
-        self.log_dir = Path(log_dir)
+        # 启动时即固定绝对路径，避免管理员启动方式改变 cwd 后写到另一处。
+        self.log_dir = Path(os.path.abspath(os.path.expanduser(os.fspath(log_dir))))
         self.session_id: str = ""
         self.score_name: str = ""
         self.log_path: Path | None = None
         self._fh = None
         self._events_count = 0
+        self.last_error: str | None = None
+        self._lock = threading.RLock()
+
+    @property
+    def is_active(self) -> bool:
+        return self._fh is not None
 
     def start_session(self, score_name: str, bpm: int, note_count: int) -> str:
         """开始新的演奏会话，返回 session_id"""
-        self.session_id = uuid.uuid4().hex[:16]
-        self.score_name = score_name
-        self._events_count = 0
-
-        try:
-            # 创建日志文件：YYYYMMDD_HHMMSS_曲谱名.jsonl
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_name = "".join(c for c in score_name if c.isalnum() or c in "_ -")[:50]
-            filename = f"{timestamp}_{safe_name}.jsonl"
-            self.log_path = self.log_dir / filename
-
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            self._fh = open(self.log_path, "w", encoding="utf-8")
-
-            # 写入会话头
-            session_header = {
-                "type": "session_start",
-                "timestamp": time.time(),
-                "session_id": self.session_id,
-                "score_name": score_name,
-                "bpm": bpm,
-                "note_count": note_count,
-                "started_at": datetime.now().isoformat(),
-            }
-            self._write_line(session_header)
-        except Exception as e:
-            # 降级：仅内存统计，不影响演奏
-            self._fh = None
+        with self._lock:
+            if self._fh is not None:
+                self.end_session(
+                    completed=0,
+                    total=0,
+                    stopped_early=True,
+                    error="新会话开始前关闭未结束的日志会话",
+                )
+            self.session_id = uuid.uuid4().hex[:16]
+            self.score_name = score_name
+            self._events_count = 0
+            self.last_error = None
             self.log_path = None
-            print(f"[EventLogger] 无法创建日志文件: {e}")
+
+            try:
+                # 微秒 + session_id + 独占创建：任何情况下都不覆盖同名历史日志。
+                now = datetime.now()
+                timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+                safe_name = "".join(
+                    c for c in score_name if c.isalnum() or c in "_ -"
+                )[:50] or "未命名"
+                filename = f"{timestamp}_{safe_name}_{self.session_id}.jsonl"
+                self.log_path = self.log_dir / filename
+
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                self._fh = open(self.log_path, "x", encoding="utf-8")
+
+                # 写入会话头
+                session_header = {
+                    "type": "session_start",
+                    "timestamp": time.time(),
+                    "session_id": self.session_id,
+                    "score_name": score_name,
+                    "bpm": bpm,
+                    "note_count": note_count,
+                    "started_at": now.isoformat(),
+                }
+                self._write_line(session_header)
+            except Exception as e:
+                # 降级：仅内存统计，不影响演奏；保留错误供诊断探针/UI 查询。
+                self.last_error = str(e)
+                if self._fh is not None:
+                    try:
+                        self._fh.close()
+                    except Exception:
+                        pass
+                self._fh = None
+                self.log_path = None
+                print(f"[EventLogger] 无法创建日志文件: {e}")
 
         return self.session_id
 
@@ -166,31 +193,32 @@ class EventLogger:
         error: str | None = None,
     ):
         """结束会话，写入统计摘要"""
-        if self._fh is None:
-            return
+        with self._lock:
+            if self._fh is None:
+                return
 
-        try:
-            session_footer = {
-                "type": "session_end",
-                "timestamp": time.time(),
-                "session_id": self.session_id,
-                "completed": completed,
-                "total": total,
-                "stopped_early": stopped_early,
-                "error": error,
-                "events_count": self._events_count,
-                "ended_at": datetime.now().isoformat(),
-            }
-            self._write_line(session_footer)
-        except Exception:
-            pass
-        finally:
-            if self._fh:
-                try:
-                    self._fh.close()
-                except Exception:
-                    pass
-                self._fh = None
+            try:
+                session_footer = {
+                    "type": "session_end",
+                    "timestamp": time.time(),
+                    "session_id": self.session_id,
+                    "completed": completed,
+                    "total": total,
+                    "stopped_early": stopped_early,
+                    "error": error,
+                    "events_count": self._events_count,
+                    "ended_at": datetime.now().isoformat(),
+                }
+                self._write_line(session_footer)
+            except Exception as exc:
+                self.last_error = str(exc)
+            finally:
+                if self._fh:
+                    try:
+                        self._fh.close()
+                    except Exception as exc:
+                        self.last_error = self.last_error or str(exc)
+                    self._fh = None
 
     def log_note(self, note_event: NoteEvent):
         """记录音符事件"""
@@ -272,20 +300,22 @@ class EventLogger:
 
     def _write_event(self, event: BaseEvent):
         """写入事件到日志文件"""
-        if self._fh is None:
-            return
+        with self._lock:
+            if self._fh is None:
+                return
 
-        try:
-            self._write_line(event.to_dict())
-            self._events_count += 1
-        except Exception as e:
-            # 写入失败时降级，关闭文件句柄
-            print(f"[EventLogger] 写入事件失败: {e}")
             try:
-                self._fh.close()
-            except Exception:
-                pass
-            self._fh = None
+                self._write_line(event.to_dict())
+                self._events_count += 1
+            except Exception as e:
+                # 写入失败时降级，关闭文件句柄
+                self.last_error = str(e)
+                print(f"[EventLogger] 写入事件失败: {e}")
+                try:
+                    self._fh.close()
+                except Exception:
+                    pass
+                self._fh = None
 
     def _write_line(self, obj: dict):
         """写入一行 JSON"""
@@ -335,6 +365,13 @@ def get_event_logger() -> EventLogger:
     global _event_logger_instance
     if _event_logger_instance is None:
         _event_logger_instance = EventLogger()
+    return _event_logger_instance
+
+
+def configure_event_logger(log_dir: str) -> EventLogger:
+    """把全局事件日志器固定到配置解析后的绝对目录。"""
+    global _event_logger_instance
+    _event_logger_instance = EventLogger(log_dir)
     return _event_logger_instance
 
 

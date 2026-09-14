@@ -187,6 +187,8 @@ class MainWindow(QMainWindow):
         profiles=None,
         event_player=None,
         preview_player=None,
+        event_log_dir=None,
+        export_dir=None,
     ):
         super().__init__()
         self._cfg = cfg
@@ -197,6 +199,8 @@ class MainWindow(QMainWindow):
         self._profile = profile
         self._profiles = list(profiles or [])
         self._event_player = event_player
+        self._event_log_dir = event_log_dir
+        self._export_dir = export_dir
         self._preview_player = (
             preview_player if preview_player is not None else PreviewPlayer(self)
         )
@@ -305,7 +309,7 @@ class MainWindow(QMainWindow):
         self.nav.currentRowChanged.connect(self._switch_page)
         sidebar_layout.addWidget(self.nav, 1)
 
-        footer = QLabel("v1.3")
+        footer = QLabel("v1.3.1")
         footer.setObjectName("SidebarFooter")
         sidebar_layout.addWidget(footer)
 
@@ -315,7 +319,12 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.upload_tab)
         self.stack.addWidget(self.library_tab)
         self.stack.addWidget(self.player_tab)
-        self.log_tab = PlayLogTab()
+        log_kwargs = {}
+        if self._event_log_dir is not None:
+            log_kwargs["log_dir"] = self._event_log_dir
+        if self._export_dir is not None:
+            log_kwargs["export_dir"] = self._export_dir
+        self.log_tab = PlayLogTab(**log_kwargs)
         self.stack.addWidget(self.log_tab)
         body.addWidget(self.stack, 1)
 

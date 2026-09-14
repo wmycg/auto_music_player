@@ -14,6 +14,8 @@ dur 单位为拍;休止符 notes 为空列表。
 - 宽容模式(默认):无效记号静默跳过,与历史行为一致
 - collect=True:额外返回错误列表,记录每个无效记号的行号、原文与原因,
   供识别校对页定位问题;音符输出与宽容模式完全一致
+- strict_ai=True:在外部 AI 粘贴入口额外检查相邻音符缺少空格的歧义,
+  只报告问题而不改变既有宽容解析结果
 同一行内记号按从左到右顺序输出,和弦与单音混排时保持真实顺序。
 """
 
@@ -27,6 +29,11 @@ _CHORD_RE = re.compile(r"[\[\(]([^\]\)]+)[\]\)]([_\-.·]*)")
 _NOTE_RE = re.compile(r"#?[0-7](?:'|,|\.|·|_|-|#)*")
 _TUNE_LINE_RE = re.compile(r"^\s*1\s*=\s*[A-Ga-g]")
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
+
+AI_MISSING_SEPARATOR_REASON = (
+    "疑似缺少音符分隔空格；请按每个音符一个记号重新输出，"
+    "低音使用英文逗号 ,，下划线 _ 仅表示时值"
+)
 
 
 @dataclass
@@ -196,11 +203,42 @@ def _iter_content_lines(text: str):
         yield line_no, line
 
 
-def _parse_line(line: str):
+def _normalize_ai_symbols(text: str) -> str:
+    """归一外部 AI 常见的等价升号，不改变乐谱数据协议。"""
+    return text.translate(str.maketrans({"♯": "#", "＃": "#"}))
+
+
+def _adjacent_note_fragments(line: str) -> list[str]:
+    """找出时值后缀后没有空白分隔的下一音符，如 ``7_1`` / ``17_1``。
+
+    这类文本可能代表低音、连续音、和弦或时值，无法安全猜测。严格 AI
+    入口只把它标为歧义；``123``、``1#2`` 等历史紧凑谱仍保持兼容。
+    """
+    matches = list(_NOTE_RE.finditer(line))
+    ranges = []
+    for left, right in zip(matches, matches[1:]):
+        if (
+            left.end() == right.start()
+            and any(marker in left.group(0) for marker in ("_", "-"))
+        ):
+            start, end = left.start(), right.end()
+            if ranges and start <= ranges[-1][1]:
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+            else:
+                ranges.append((start, end))
+    return [line[start:end] for start, end in ranges]
+
+
+def _parse_line(line: str, *, strict_ai: bool = False):
     """解析单行,返回 (音符序列, 问题列表)。问题为 (token, 原因)。"""
     line = _normalize_delta_community_notation(line)
     notes = []
     problems = []
+    if strict_ai:
+        problems.extend(
+            (fragment, AI_MISSING_SEPARATOR_REASON)
+            for fragment in _adjacent_note_fragments(line)
+        )
     consumed = bytearray(len(line))
     tokens = []  # (起始位置, 原文, 音符 dict 或 None, 问题或 None)
 
@@ -244,16 +282,18 @@ def _parse_line(line: str):
     return notes, problems
 
 
-def parse_jianpu(text: str, *, collect: bool = False):
+def parse_jianpu(text: str, *, collect: bool = False, strict_ai: bool = False):
     """解析规范化简谱文本。
 
     collect=False(默认):返回音符序列,无效记号静默跳过(宽容,兼容旧行为)。
     collect=True:返回 (音符序列, 错误列表),错误含行号/原文/原因。
+    strict_ai=True:额外报告 AI 输出中相邻音符缺少空格的歧义；不改变返回数据格式。
     """
+    text = _normalize_ai_symbols(text)
     result = []
     errors = []
     for line_no, line in _iter_content_lines(text):
-        notes, problems = _parse_line(line)
+        notes, problems = _parse_line(line, strict_ai=strict_ai)
         result.extend(notes)
         if collect:
             errors.extend(ParseError(line_no, token, reason) for token, reason in problems)
